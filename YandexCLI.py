@@ -19,6 +19,9 @@ def normalize_public_key(link: str) -> str:
     token = extract_token(link)
     return f"https://disk.yandex.com/d/{token}"
 
+def part_path(path: Path) -> Path:
+    return path.parent / (path.name + ".part")
+
 def make_session(max_workers: int) -> requests.Session:
     s = requests.Session()
     retries = Retry(total=8, backoff_factor=0.6,
@@ -98,7 +101,7 @@ def verify_file(path: Path, sha256: str | None, md5: str | None, pbar: tqdm | No
 
 def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do_verify: bool):
     dest = dest_root / rec["relpath"]
-    tmp  = dest.with_suffix(dest.suffix + ".part")
+    tmp  = part_path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     expected_size = rec["size"]
@@ -144,7 +147,7 @@ def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do
         raise RuntimeError(f"Size mismatch: {dest} got {tmp.stat().st_size} expected {expected_size}")
 
     if do_verify and (sha256 or md5):
-        verify_file(tmp, sha256, md5, pbar=pbar)
+        verify_file(tmp, sha256, md5, pbar=None)
 
     tmp.rename(dest)
 
@@ -251,7 +254,7 @@ def main():
             if rec["size"] and dest.stat().st_size == rec["size"]:
                 already += rec["size"]
             else:
-                part = dest.with_suffix(dest.suffix + ".part")
+                part = part_path(dest)
                 if part.exists(): already += part.stat().st_size
 
     with tqdm(total=total_bytes, unit="B", unit_scale=True, unit_divisor=1024,

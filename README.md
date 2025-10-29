@@ -39,12 +39,12 @@ Notes:
 
 **Normal installation:**
 ```bash
-pip install requests tqdm
+pip install requests rich
 ```
 
 **If you have Nix:** *(optional)*
 ```bash
-nix shell --impure --expr 'let pkgs = import <nixpkgs> {}; in pkgs.python312.withPackages (ps: [ ps.requests ps.tqdm ])'
+nix shell --impure --expr 'let pkgs = import <nixpkgs> {}; in pkgs.python312.withPackages (ps: [ ps.requests ps.rich ])'
 ```
 
 ## Usage

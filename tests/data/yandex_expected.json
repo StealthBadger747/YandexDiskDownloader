@@ -1,5 +1,20 @@
 {
   "expected_tree": {
+    "subfolder/big_buck_bunny_1080p_h264.mov": {
+      "size": 725106140,
+      "md5": "c23ab2ff12023c684f46fcc02c57b585",
+      "sha256": "dc2146a2b1172def56730143ad80cd1825b7fad15f1fc9c23a4e7d01a741ac11"
+    },
+    "subfolder/file-example_PDF_1MB.pdf": {
+      "size": 1223,
+      "md5": "5b692b93b432718dac4fea2080b25946",
+      "sha256": "236141f43c69e238a1c8a711f3789d59fca2ef8cf503fc08fb3d23cd399a7745"
+    },
+    "subfolder/zip_10MB.zip": {
+      "size": 2142,
+      "md5": "e6580704bea16d822c89182a797c2311",
+      "sha256": "7f871fc6df9c139a67251f2c8eb296dcae6fa18825f202eb90bb9502219a9a9a"
+    },
     "file_example_MOV_1920_2_2MB.mov": {
       "size": 2247200,
       "md5": "a83042765f254adccb53cb1e455c1733",
@@ -19,19 +34,14 @@
       "size": 2142,
       "md5": "77035fd1b6366748282f6d4df5025f8f",
       "sha256": "a835587157427c638b39bc48ebda593502ba7ff7a4b74b7065341a717a74449c"
-    },
-    "subfolder/file-example_PDF_1MB.pdf": {
-      "size": 1223,
-      "md5": "5b692b93b432718dac4fea2080b25946",
-      "sha256": "236141f43c69e238a1c8a711f3789d59fca2ef8cf503fc08fb3d23cd399a7745"
-    },
-    "subfolder/zip_10MB.zip": {
-      "size": 2142,
-      "md5": "e6580704bea16d822c89182a797c2311",
-      "sha256": "7f871fc6df9c139a67251f2c8eb296dcae6fa18825f202eb90bb9502219a9a9a"
     }
   },
   "expected_subfolder_flat": {
+    "big_buck_bunny_1080p_h264.mov": {
+      "size": 725106140,
+      "md5": "c23ab2ff12023c684f46fcc02c57b585",
+      "sha256": "dc2146a2b1172def56730143ad80cd1825b7fad15f1fc9c23a4e7d01a741ac11"
+    },
     "file-example_PDF_1MB.pdf": {
       "size": 1223,
       "md5": "5b692b93b432718dac4fea2080b25946",

@@ -28,6 +28,12 @@ def test_download_and_verify_subfolder_e2e(
     dest = tmp_path / "downloads"
     dest.mkdir()
 
+    max_bytes = 5_000_000  # keep downloads small during tests
+    filtered_expected = {
+        name: meta for name, meta in expected_subfolder_flat.items() if meta["size"] <= max_bytes
+    }
+    assert filtered_expected, "Filtered expectations should not be empty"
+
     # Download just the subfolder contents, flattening the root directory locally.
     run_cli(
         project_root,
@@ -38,13 +44,19 @@ def test_download_and_verify_subfolder_e2e(
         "--no-preserve-root",
         "-d",
         str(dest),
+        "--max-bytes",
+        str(max_bytes),
     )
 
-    for filename, meta in expected_subfolder_flat.items():
+    for filename, meta in filtered_expected.items():
         local_path = dest / filename
         assert local_path.exists(), f"Missing file {filename}"
         assert local_path.stat().st_size == meta["size"]
         assert compute_sha256(local_path) == meta["sha256"]
+
+    skipped = set(expected_subfolder_flat) - set(filtered_expected)
+    for filename in skipped:
+        assert not (dest / filename).exists(), f"{filename} should be filtered out"
 
     # Re-run in verify-only mode to exercise the verification path.
     run_cli(
@@ -57,4 +69,6 @@ def test_download_and_verify_subfolder_e2e(
         "-d",
         str(dest),
         "--verify-only",
+        "--max-bytes",
+        str(max_bytes),
     )

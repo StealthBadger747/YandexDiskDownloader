@@ -2,9 +2,20 @@
 import argparse, hashlib, os, re, sys, time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from queue import Queue
+from typing import Callable
+
 import requests
 from requests.adapters import HTTPAdapter, Retry
-from tqdm import tqdm
+from rich.progress import (
+    BarColumn,
+    DownloadColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeRemainingColumn,
+    TransferSpeedColumn,
+)
 
 LIST_URL = "https://cloud-api.yandex.net/v1/disk/public/resources"
 DL_URL   = "https://cloud-api.yandex.net/v1/disk/public/resources/download"
@@ -32,6 +43,119 @@ def make_session(max_workers: int) -> requests.Session:
                                     pool_connections=max_workers,
                                     pool_maxsize=max_workers))
     return s
+
+
+class WorkerAllocator:
+    def __init__(self, workers: int):
+        self._queue: Queue[int] = Queue()
+        for wid in range(workers):
+            self._queue.put(wid)
+
+    def acquire(self) -> int:
+        return self._queue.get()
+
+    def release(self, worker_id: int) -> None:
+        self._queue.put(worker_id)
+
+
+class RichDownloadProgress:
+    def __init__(self, total_bytes: int, workers: int, stage: str, refresh_per_second: float = 5.0):
+        self.total_bytes = total_bytes
+        self.workers = workers
+        self.stage = stage
+        self.progress = Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description:<14}", justify="left"),
+            BarColumn(bar_width=None),
+            DownloadColumn(),
+            TransferSpeedColumn(),
+            TimeRemainingColumn(),
+            TextColumn("{task.fields[current]}", justify="left"),
+            refresh_per_second=refresh_per_second,
+            expand=True,
+        )
+        self.total_task: int | None = None
+        self.worker_tasks: dict[int, int] = {}
+        self._started_workers: set[int] = set()
+
+    def __enter__(self):
+        self.progress.__enter__()
+        total_for_bars = self.total_bytes if self.total_bytes > 0 else 1
+        self.total_task = self.progress.add_task(
+            self.stage,
+            total=total_for_bars,
+            current="",
+        )
+        for idx in range(self.workers):
+            description = f"Worker {idx+1}"
+            task_id = self.progress.add_task(
+                description,
+                total=total_for_bars,
+                current="",
+                start=False,
+            )
+            self.worker_tasks[idx] = task_id
+        if self.total_bytes == 0:
+            self.progress.update(self.total_task, completed=0)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return self.progress.__exit__(exc_type, exc, tb)
+
+    def set_initial(self, amount: int) -> None:
+        if not amount or self.total_task is None:
+            return
+        task = self.progress.tasks[self.total_task]
+        total = task.total or amount
+        clamped = min(amount, total)
+        self.progress.update(self.total_task, completed=clamped)
+
+    def assign_worker(self, worker_id: int, current: str, total: int, completed: int = 0) -> None:
+        task_id = self.worker_tasks.get(worker_id)
+        if task_id is None:
+            return
+        task_total = total if total > 0 else 1
+        if total <= 0:
+            clamped_completed = task_total
+        else:
+            clamped_completed = min(max(completed, 0), task_total)
+        self.progress.update(
+            task_id,
+            total=task_total,
+            completed=clamped_completed,
+            current=current,
+        )
+        if worker_id not in self._started_workers:
+            self.progress.start_task(task_id)
+            self._started_workers.add(worker_id)
+
+    def _advance_task(self, task_id: int, amount: int, clamp: bool) -> None:
+        if amount <= 0:
+            return
+        task = self.progress.tasks[task_id]
+        if clamp and task.total is not None:
+            remaining = max(task.total - task.completed, 0)
+            if remaining <= 0:
+                return
+            amount = min(amount, remaining)
+        self.progress.update(task_id, advance=amount)
+
+    def advance(self, worker_id: int | None, amount: int) -> None:
+        if amount <= 0 or self.total_task is None:
+            return
+        self._advance_task(self.total_task, amount, clamp=True)
+        if worker_id is None:
+            return
+        task_id = self.worker_tasks.get(worker_id)
+        if task_id is None:
+            return
+        self._advance_task(task_id, amount, clamp=True)
+
+    def clear_worker(self, worker_id: int) -> None:
+        task_id = self.worker_tasks.get(worker_id)
+        if task_id is None:
+            return
+        self.progress.update(task_id, current="")
 
 def api_list(session: requests.Session, public_key: str, path: str, limit: int = 1000):
     offset = 0
@@ -82,24 +206,24 @@ def crawl_recursive(session, public_key, root_path, rel: Path, preserve_root: bo
             })
     return files
 
-def hash_file(path: Path, algo: str, pbar: tqdm | None = None, chunk=1<<20) -> str:
+def hash_file(path: Path, algo: str, report: Callable[[int], None] | None = None, chunk=1<<20) -> str:
     h = hashlib.sha256() if algo == "sha256" else hashlib.md5()
     with path.open("rb", buffering=0) as f:
         for chunk_bytes in iter(lambda: f.read(chunk), b""):
             h.update(chunk_bytes)
-            if pbar is not None:
-                pbar.update(len(chunk_bytes))
+            if report is not None:
+                report(len(chunk_bytes))
     return h.hexdigest()
 
-def verify_file(path: Path, sha256: str | None, md5: str | None, pbar: tqdm | None = None):
+def verify_file(path: Path, sha256: str | None, md5: str | None, report: Callable[[int], None] | None = None):
     if sha256:
-        if hash_file(path, "sha256", pbar) != sha256:
+        if hash_file(path, "sha256", report) != sha256:
             raise ValueError(f"SHA-256 mismatch: {path}")
     elif md5:
-        if hash_file(path, "md5", pbar) != md5:
+        if hash_file(path, "md5", report) != md5:
             raise ValueError(f"MD5 mismatch: {path}")
 
-def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do_verify: bool):
+def download_one(session, public_key, dest_root: Path, rec: dict, progress: RichDownloadProgress | None, worker_id: int | None, do_verify: bool):
     dest = dest_root / rec["relpath"]
     tmp  = part_path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -110,12 +234,20 @@ def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do
     # fast-skip if complete (and valid if verify is on)
     if dest.exists() and (expected_size == 0 or dest.stat().st_size == expected_size):
         if do_verify and (sha256 or md5):
-            verify_file(dest, sha256, md5, pbar=None)
+            verify_file(dest, sha256, md5, report=None)
         return
 
     resume_at = tmp.stat().st_size if tmp.exists() else 0
     if expected_size and resume_at > expected_size:
         tmp.unlink(missing_ok=True); resume_at = 0
+
+    if progress is not None and worker_id is not None:
+        progress.assign_worker(
+            worker_id,
+            current=str(rec["relpath"]),
+            total=expected_size,
+            completed=resume_at,
+        )
 
     attempts = 0
     while True:
@@ -137,7 +269,9 @@ def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do
                 with tmp.open(mode) as f:
                     for chunk_bytes in r.iter_content(1<<20):
                         if not chunk_bytes: continue
-                        f.write(chunk_bytes); pbar.update(len(chunk_bytes))
+                        f.write(chunk_bytes)
+                        if progress is not None:
+                            progress.advance(worker_id, len(chunk_bytes))
             break
         except Exception:
             if attempts >= 6: raise
@@ -147,7 +281,7 @@ def download_one(session, public_key, dest_root: Path, rec: dict, pbar: tqdm, do
         raise RuntimeError(f"Size mismatch: {dest} got {tmp.stat().st_size} expected {expected_size}")
 
     if do_verify and (sha256 or md5):
-        verify_file(tmp, sha256, md5, pbar=None)
+        verify_file(tmp, sha256, md5, report=None)
 
     tmp.rename(dest)
 
@@ -157,7 +291,7 @@ def verify_only(dest_root: Path, files: list[dict], workers: int) -> int:
         p = dest_root / rec["relpath"]
         if p.exists() and p.is_file():
             total_to_hash += rec.get("size", 0) or 0
-            work.append((p, rec.get("sha256"), rec.get("md5")))
+            work.append((p, rec.get("sha256"), rec.get("md5"), rec.get("size", 0) or p.stat().st_size))
         else:
             missing.append(str(rec["relpath"]))
 
@@ -165,20 +299,42 @@ def verify_only(dest_root: Path, files: list[dict], workers: int) -> int:
         print(f"[verify] missing files: {len(missing)}", file=sys.stderr)
 
     errors = []
-    def task(entry, pbar: tqdm):
-        path, sha256, md5 = entry
+    if not work:
+        print(f"[verify] checked: 0 files | missing: {len(missing)} | failed: 0", file=sys.stderr)
+        return 0 if not missing else 2
+
+    allocator = WorkerAllocator(workers)
+
+    def describe_path(path: Path) -> str:
         try:
-            verify_file(path, sha256, md5, pbar=pbar)
+            return str(path.relative_to(dest_root))
+        except ValueError:
+            return path.name
+
+    def task(entry, progress: RichDownloadProgress):
+        path, sha256, md5, size = entry
+        worker_id = allocator.acquire()
+        try:
+            progress.assign_worker(worker_id, describe_path(path), total=size, completed=0)
+
+            def report(amount: int) -> None:
+                progress.advance(worker_id, amount)
+
+            verify_file(path, sha256, md5, report=report)
             return (path, True, "")
         except Exception as e:
             return (path, False, str(e))
+        finally:
+            progress.clear_worker(worker_id)
+            allocator.release(worker_id)
 
-    with tqdm(total=total_to_hash, unit="B", unit_scale=True, unit_divisor=1024, desc="Verifying") as pbar:
+    with RichDownloadProgress(total_to_hash, workers, "Verifying") as progress:
         with ThreadPoolExecutor(max_workers=workers) as ex:
-            futures = [ex.submit(task, e, pbar) for e in work]
+            futures = [ex.submit(task, entry, progress) for entry in work]
             for fut in as_completed(futures):
                 path, ok, msg = fut.result()
-                if not ok: errors.append((str(path), msg))
+                if not ok:
+                    errors.append((str(path), msg))
 
     print(f"[verify] checked: {len(work)} files | missing: {len(missing)} | failed: {len(errors)}", file=sys.stderr)
     if missing:
@@ -200,6 +356,7 @@ def main():
     ap.add_argument("--all-top-level", action="store_true", help="Enumerate '/' and download every first-level entry.")
     ap.add_argument("--no-preserve-root", action="store_true", help="Do NOT include the requested folder name as a local top-level dir.")
     ap.add_argument("-w","--workers", type=int, default=16, help="Parallel threads (default 16).")
+    ap.add_argument("--max-bytes", type=int, default=None, help="Skip any file larger than this many bytes.")
     ap.add_argument("--no-verify", action="store_true", help="Skip per-file hash verification during download.")
     ap.add_argument("--verify-only", action="store_true", help="Do not download; verify hashes of existing files.")
     args = ap.parse_args()
@@ -237,6 +394,13 @@ def main():
     for remote_path, local_rel, preserve_root in targets:
         files.extend(crawl_recursive(session, public_key, remote_path, rel=local_rel, preserve_root=preserve_root))
 
+    if args.max_bytes is not None:
+        filtered = [rec for rec in files if (rec.get("size", 0) or 0) <= args.max_bytes]
+        skipped = len(files) - len(filtered)
+        if skipped:
+            print(f"[list] filtered out {skipped} file(s) larger than {args.max_bytes} bytes", file=sys.stderr)
+        files = filtered
+
     if not files:
         print("No files found.", file=sys.stderr); return 1
 
@@ -257,12 +421,23 @@ def main():
                 part = part_path(dest)
                 if part.exists(): already += part.stat().st_size
 
-    with tqdm(total=total_bytes, unit="B", unit_scale=True, unit_divisor=1024,
-              desc="Downloading", initial=already) as pbar:
+    allocator = WorkerAllocator(args.workers)
+
+    with RichDownloadProgress(total_bytes, args.workers, "Downloading") as progress:
+        progress.set_initial(already)
+
+        def run_download(rec: dict):
+            worker_id = allocator.acquire()
+            try:
+                download_one(session, public_key, dest_parent, rec, progress, worker_id, not args.no_verify)
+            finally:
+                progress.clear_worker(worker_id)
+                allocator.release(worker_id)
+
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            futs = [ex.submit(download_one, session, public_key, dest_parent, rec, pbar, not args.no_verify)
-                    for rec in files]
-            for fut in as_completed(futs): fut.result()
+            futures = [ex.submit(run_download, rec) for rec in files]
+            for fut in as_completed(futures):
+                fut.result()
 
     print("Done.", file=sys.stderr); return 0
 

@@ -1,6 +1,6 @@
 # YandexDisk Downloader and Verifier
 
-Parallel, resumable downloader for public Yandex Disk shares. Recursively walks folders, verifies each file (SHA-256/MD5), and bypasses the web “Download as ZIP” limit by fetching files directly via the public API.
+A Parallel, resumable downloader for public Yandex Disk shares without the ZIP download cap. It recurses folders, resumes partial files, and verifies every byte (SHA-256/MD5) against the public API with **no account required**.
 
 ## Features
 
@@ -28,6 +28,12 @@ Notes:
 - `ydiskarc` has two modes: `sync` downloads files recursively (avoids ZIP), while `full` downloads Yandex’s pre-zipped archive.  
 - `ya-disk-downloader` downloads files from a flat folder only (no recursion).  
 - `yadisk-direct` and `YandexDown` handle single-file links, not folders.
+
+### Demo
+
+<p>
+  <img src="assets/demo.gif" alt="CLI demo" width="80%">
+</p>
 
 ## Installation
 
@@ -81,6 +87,7 @@ python3 YandexCLI.py \
 
 - `-w/--workers N` — number of download threads (default: 16)
 - `-d/--dest DIR` — destination parent directory (default: token extracted from the link)
+- `--max-bytes N` — skip files larger than `N` bytes
 
 ## Verification behavior
 

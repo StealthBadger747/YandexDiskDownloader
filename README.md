@@ -15,7 +15,7 @@ Parallel, resumable downloader for public Yandex Disk shares. Recursively walks 
 ### Comparison with Other Yandex Disk Tools
 
 | Tool | Recursive | Parallel | Hash verify | Resumable | Preserves tree | **Avoids web ZIP** | CLI |
-|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
+|---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|
 | **[This tool (YandexCLI.py)](YandexCLI.py)** | ✅ | ✅ | ✅ (SHA-256/MD5) | ✅ | ✅ | ✅ | ✅ |
 | **[ruarxive/ydiskarc](https://github.com/ruarxive/ydiskarc)** | ✅ | ❌ | ❌ | ❌ | ✅ | ✅ / ❌ | ✅ |
 | **[redmanmale/ya-disk-downloader](https://github.com/redmanmale/ya-disk-downloader)** | ❌ | ❌ | ❌ | ❓ | — | ❓ | ✅ |
